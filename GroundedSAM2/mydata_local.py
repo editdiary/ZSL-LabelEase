@@ -16,17 +16,16 @@ from glob import glob
 """
 Hyper parameters
 """
-TEXT_PROMPT = "yellow fruit."
-#IMG_PATH = "my_dataset/20250526_rfv1_frame003.jpg"
-IMG_PATH = glob("my_dataset/temp/*.jpg")
-SAM2_CHECKPOINT = "./checkpoints/sam2.1_hiera_large.pt"
-SAM2_MODEL_CONFIG = "configs/sam2.1/sam2.1_hiera_l.yaml"
+TEXT_PROMPT = "yellow mature fruit."
+IMG_PATH = glob("my_dataset/rfv/images/*.jpg")
+SAM2_CHECKPOINT = "./checkpoints/sam2.1_hiera_tiny.pt"
+SAM2_MODEL_CONFIG = "configs/sam2.1/sam2.1_hiera_t.yaml"
 GROUNDING_DINO_CONFIG = "grounding_dino/groundingdino/config/GroundingDINO_SwinT_OGC.py"
 GROUNDING_DINO_CHECKPOINT = "gdino_checkpoints/groundingdino_swint_ogc.pth"
 BOX_THRESHOLD = 0.35
 TEXT_THRESHOLD = 0.25
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-OUTPUT_DIR = Path("outputs/folder_demo")
+OUTPUT_DIR = Path("outputs/PID4/CID4/rfv")
 DUMP_JSON_RESULTS = True
 
 # create output directory
@@ -71,33 +70,45 @@ for img_path in IMG_PATH:
 
     # process the box prompt for SAM 2
     h, w, _ = image_source.shape
-    boxes = boxes * torch.Tensor([w, h, w, h])
-    input_boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+
+    if boxes.size(0) == 0:
+        print(f"  - 객체를 찾지 못했습니다: {os.path.basename(img_path)}")
+        # If no objects are found, create empty tensors/lists so the rest of the script can run without errors.
+        input_boxes = np.empty((0, 4))
+        masks = np.empty((0, h, w), dtype=np.float32)
+        scores = torch.tensor([])
+        # Overwrite G-DINO outputs with empty lists to avoid errors in post-processing
+        confidences = torch.tensor([])
+        labels = []  # This is `class_names` later.
+    else:
+        # If objects are found, run the original processing logic.
+        boxes = boxes * torch.Tensor([w, h, w, h])
+        input_boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
 
 
-    # FIXME: figure how does this influence the G-DINO model
-    ## SAM2 연산만 bfloat16으로 설정
-    with torch.autocast(device_type=DEVICE, dtype=torch.bfloat16):
-        if torch.cuda.is_available() and torch.cuda.get_device_properties(0).major >= 8:
-            # turn on tfloat32 for Ampere GPUs (https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices)
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
+        # FIXME: figure how does this influence the G-DINO model
+        ## SAM2 연산만 bfloat16으로 설정
+        with torch.autocast(device_type=DEVICE, dtype=torch.bfloat16):
+            if torch.cuda.is_available() and torch.cuda.get_device_properties(0).major >= 8:
+                # turn on tfloat32 for Ampere GPUs (https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices)
+                torch.backends.cuda.matmul.allow_tf32 = True
+                torch.backends.cudnn.allow_tf32 = True
 
-        masks, scores, logits = sam2_predictor.predict(
-            point_coords=None,
-            point_labels=None,
-            box=input_boxes,
-            multimask_output=False,
-        )
+            masks, scores, logits = sam2_predictor.predict(
+                point_coords=None,
+                point_labels=None,
+                box=input_boxes,
+                multimask_output=False,
+            )
+
+        # convert the shape to (n, H, W)
+        if masks.ndim == 4:
+            masks = masks.squeeze(1)
+
 
     """
     Post-process the output of the model to get the masks, scores, and logits for visualization
     """
-    # convert the shape to (n, H, W)
-    if masks.ndim == 4:
-        masks = masks.squeeze(1)
-
-
     confidences = confidences.numpy().tolist()
     class_names = labels
 
